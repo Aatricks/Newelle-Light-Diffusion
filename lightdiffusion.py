@@ -145,21 +145,21 @@ class LightDiffusionExtension(NewelleExtension):
                         1,
                         0,
                     ),
-                    # ExtraSettings.ScaleSetting(
-                    #     "img2img_enabled",
-                    #     "Img2Img",
-                    #     "Enable Image-to-Image mode (uses image path below)",
-                    #     0,
-                    #     0,
-                    #     1,
-                    #     0,
-                    # ),
-                    # ExtraSettings.EntrySetting(
-                    #     "img2img_image",
-                    #     "Img2Img Image Path",
-                    #     "Local path or URL of the source image for Img2Img",
-                    #     "",
-                    # ),
+                    ExtraSettings.ScaleSetting(
+                        "img2img_enabled",
+                        "Img2Img (Upscale)",
+                        "Enable Image-to-Image mode; the server reads the image from this path",
+                        0,
+                        0,
+                        1,
+                        0,
+                    ),
+                    ExtraSettings.EntrySetting(
+                        "img2img_image",
+                        "Img2Img Image Path",
+                        "Absolute path to the source image on the server machine",
+                        "",
+                    ),
                     ExtraSettings.ScaleSetting(
                         "stable_fast",
                         "Stable-Fast",
@@ -413,6 +413,16 @@ class LightDiffusionExtension(NewelleExtension):
                 "keep_models_loaded": get_bool("keep_models_loaded", True),
                 "enable_preview": get_bool("enable_preview", False),
             }
+
+            # If Img2Img is enabled, ensure an input image path is provided
+            try:
+                img2img_enabled = bool(int(self.get_setting("img2img_enabled") or 0))
+            except Exception:
+                img2img_enabled = False
+            img2img_image = (self.get_setting("img2img_image") or "").strip()
+            if img2img_enabled and not img2img_image:
+                show_error_message("Img2Img is enabled but no image path is set in Advanced Settings.")
+                return
 
             # Attach commonly requested extras if backend supports them
             if steps is not None:
