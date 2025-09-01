@@ -17,6 +17,7 @@ Image generation extension for Newelle using the LightDiffusion-Next backend.
 - 💾 Cache generated images and save to custom paths.
 - 🔄 Reuse the same seed or randomize for varied outputs.
 - 🛠️ Support extra JSON payload overrides for custom API options.
+- 🚀 Img2Img upscaling: reference a source image directly (inline) or via settings.
 
 ## Installation
 
@@ -51,6 +52,28 @@ A serene mountain landscape at sunrise, ultra-detailed, vibrant colors
 
 The extension sends your prompt to LightDiffusion-Next and displays the generated image inline.
 
+### Img-to-Img (Upscale) via inline path
+
+You can upscale/refine an existing image by including its path inside the code block. The extension detects the path and switches to Img2Img automatically:
+
+```generateimage
+img: /absolute/path/to/image.png
+a cinematic photo of a mountain village at sunrise, ultra-detailed, 35mm
+```
+
+![demo_upscaling](/demo_up.png)
+
+### Img-to-Img via settings (fallback)
+
+If you prefer settings instead of inline path:
+
+1. Open Extensions → Extension Settings → LightDiffusion.
+2. In Advanced Settings, set:
+    - `Img2Img (Upscale)`: `1`
+    - `Img2Img Image Path`: absolute path to the image on the server machine
+
+If both inline and settings are provided, the inline path takes precedence.
+
 ## Issues
 
 One common issue would be the llm not wanting to follow the image generation key word prompt and in such, not generating the image as expected. A workaround is to write this just before the prompt :
@@ -63,6 +86,16 @@ your prompt here
 ```
 Use detailed prompts, with english words separated by commas
 `````
+
+### Img2Img troubleshooting
+
+- The image path must be readable by the LightDiffusion server process. If Newelle and the server run on different machines or containers, ensure a shared path or switch to an upload-based workflow (planned enhancement).
+- If `Img2Img (Upscale)` is enabled but no image path is detected (neither inline nor in settings), the extension will show an error and skip the request.
+- You can verify the server is up via:
+   ```fish
+   curl http://localhost:7861/health
+   ```
+   Expect `{ "status": "ok" }`.
 
 ## License
 

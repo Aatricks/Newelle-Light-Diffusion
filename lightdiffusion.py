@@ -17,6 +17,7 @@ import traceback
 from threading import Thread
 import re
 from typing import Any, Dict, Optional
+import urllib.parse
 
 import requests
 from gi.repository import Gtk, Gdk, GdkPixbuf
@@ -47,8 +48,10 @@ class LightDiffusionExtension(NewelleExtension):
                 "Generate images using the LightDiffusion backend",
                 (
 
-                    "If prompted to generate an image, only follow this instruction and this exact format written just below"
+                    "If prompted to generate an image or to upscale an image, only follow this instruction and this exact format written just below"
                     "```generateimage\n"
+                    "# Optional: for img2img/upscaling, include a source image path on its own line, if the image provided is [img-0] do not add the image path but only make up a prompt of quality tags:\n"
+                    "img: /absolute/path/to/image.png\n"
                     "your prompt here\n"
                     "```\n"
                     "Use detailed prompts, with english words separated by commas\n"
@@ -276,8 +279,11 @@ class LightDiffusionExtension(NewelleExtension):
     def restore_gtk_widget(self, codeblock: str, lang: str, msg_uuid: str) -> Gtk.Widget | None:
         widget = ImageGeneratorWidget(width=400, height=400)
         # Normalize the incoming block so we support both multi-line and one-liner formats
-        normalized_prompt = self._extract_prompt_from_block(codeblock, lang)
+        normalized_prompt, inline_img = self._parse_codeblock_for_img2img(codeblock, lang)
         widget.set_prompt(normalized_prompt)
+        if inline_img:
+            widget.img2img_image = self._normalize_local_path(inline_img)
+            widget.img2img_enabled = True
         cached_path = os.path.join(self.cache_dir, f"{msg_uuid}.png")
         if os.path.exists(cached_path):
             widget.set_image_from_path(cached_path)
@@ -286,8 +292,11 @@ class LightDiffusionExtension(NewelleExtension):
     def get_gtk_widget(self, codeblock: str, lang: str, msg_uuid: str = None) -> Gtk.Widget | None:
         widget = ImageGeneratorWidget(width=400, height=400)
         # Normalize the incoming block so we support both multi-line and one-liner formats
-        normalized_prompt = self._extract_prompt_from_block(codeblock, lang)
+        normalized_prompt, inline_img = self._parse_codeblock_for_img2img(codeblock, lang)
         widget.set_prompt(normalized_prompt)
+        if inline_img:
+            widget.img2img_image = self._normalize_local_path(inline_img)
+            widget.img2img_enabled = True
         Thread(target=self.generate_image, args=(normalized_prompt, widget, msg_uuid)).start()
         return widget
 
@@ -397,8 +406,9 @@ class LightDiffusionExtension(NewelleExtension):
                 "hires_fix": get_bool("hires_fix", False),
                 "adetailer": get_bool("adetailer", False),
                 "enhance_prompt": get_bool("enhance_prompt", False),
-                "img2img_enabled": get_bool("img2img_enabled", False),
-                "img2img_image": (self.get_setting("img2img_image") or None),
+                # effective img2img fields set below (inline path overrides settings)
+                "img2img_enabled": False,
+                "img2img_image": None,
                 "stable_fast": get_bool("stable_fast", False),
                 # If explicit seed is provided, server will force reuse; otherwise honor UI toggle
                 "reuse_seed": (seed != -1) or get_bool("reuse_seed", False),
@@ -413,15 +423,17 @@ class LightDiffusionExtension(NewelleExtension):
                 "keep_models_loaded": get_bool("keep_models_loaded", True),
                 "enable_preview": get_bool("enable_preview", False),
             }
-
-            # If Img2Img is enabled, ensure an input image path is provided
-            try:
-                img2img_enabled = bool(int(self.get_setting("img2img_enabled") or 0))
-            except Exception:
-                img2img_enabled = False
-            img2img_image = (self.get_setting("img2img_image") or "").strip()
-            if img2img_enabled and not img2img_image:
-                show_error_message("Img2Img is enabled but no image path is set in Advanced Settings.")
+            # Determine effective img2img (inline image path takes precedence over settings)
+            inline_img = getattr(widget, "img2img_image", None)
+            inline_img = self._normalize_local_path(inline_img) if inline_img else None
+            settings_img = (self.get_setting("img2img_image") or "").strip() or None
+            settings_enabled = get_bool("img2img_enabled", False)
+            effective_img = inline_img or settings_img
+            effective_enabled = bool(inline_img) or settings_enabled
+            payload["img2img_enabled"] = effective_enabled
+            payload["img2img_image"] = effective_img
+            if effective_enabled and not effective_img:
+                show_error_message("Img2Img is enabled but no image was provided (neither inline nor in settings).")
                 return
 
             # Attach commonly requested extras if backend supports them
@@ -541,6 +553,67 @@ class LightDiffusionExtension(NewelleExtension):
 
         return body.strip()
 
+    def _normalize_local_path(self, p: str) -> str:
+        """Normalize file:// URIs and trim whitespace."""
+        p = (p or "").strip()
+        if p.startswith("file://"):
+            url = urllib.parse.urlparse(p)
+            p = urllib.parse.unquote(url.path)
+        return p
+
+    def _extract_inline_img_path(self, text: str) -> Optional[str]:
+        """Find an inline image path via directive, markdown image, or bare absolute path."""
+        if not text:
+            return None
+        lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+
+        # 1) Directive forms: img:, image:, source:, path:, img2img:
+        dir_re = re.compile(r"^(?:img2img|img|image|source|path)\s*:\s*(\S+)$", re.IGNORECASE)
+        for ln in lines:
+            m = dir_re.match(ln)
+            if m:
+                return self._normalize_local_path(m.group(1))
+
+        # 2) Markdown image syntax: ![alt](path)
+        md_re = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+        for ln in lines:
+            m = md_re.search(ln)
+            if m:
+                return self._normalize_local_path(m.group(1))
+
+        # 3) Bare absolute path with common image extensions
+        path_re = re.compile(r"^(/[^ \t]+?\.(?:png|jpg|jpeg|webp))$", re.IGNORECASE)
+        for ln in lines:
+            m = path_re.match(ln)
+            if m:
+                return self._normalize_local_path(m.group(1))
+
+        return None
+
+    def _strip_img_lines(self, text: str) -> str:
+        """Remove lines that declare/contain the img path so they don't pollute the prompt."""
+        if not text:
+            return text
+        out = []
+        dir_re = re.compile(r"^(?:img2img|img|image|source|path)\s*:\s*\S+$", re.IGNORECASE)
+        md_re = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+        path_re = re.compile(r"^(/[^ \t]+?\.(?:png|jpg|jpeg|webp))$", re.IGNORECASE)
+        for ln in text.splitlines():
+            s = ln.strip()
+            if dir_re.match(s) or md_re.search(s) or path_re.match(s):
+                continue
+            out.append(ln)
+        return "\n".join(out).strip()
+
+    def _parse_codeblock_for_img2img(self, codeblock: str | None, lang: str | None) -> tuple[str, Optional[str]]:
+        """Return (clean_prompt, img_path) by parsing inline directives or markdown images."""
+        prompt_only = self._extract_prompt_from_block(codeblock, lang)
+        img_path = self._extract_inline_img_path(codeblock or "")
+        if not img_path and lang:
+            img_path = self._extract_inline_img_path(lang)
+        clean_prompt = self._strip_img_lines(prompt_only)
+        return clean_prompt, img_path
+
     def _save_base64_png(self, b64_data: str, out_path: str) -> None:
         # Some APIs prefix with data:image/png;base64,
         if "," in b64_data and b64_data.strip().startswith("data:"):
@@ -563,6 +636,9 @@ class ImageGeneratorWidget(Gtk.Box):
         self.current_pixbuf = None
         self.current_url = None
         self.prompt = None  # Store the original prompt
+        # Inline img2img support (set by extension when parsing code block)
+        self.img2img_image: Optional[str] = None
+        self.img2img_enabled: bool = False
         
         # Set up CSS for loading animation
         self.setup_css()
