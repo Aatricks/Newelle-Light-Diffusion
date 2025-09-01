@@ -6,6 +6,8 @@ It's modeled after the Stable Diffusion WebUI extension and reuses
 its ImageGeneratorWidget. (https://github.com/FrancescoCaracciolo/Newelle-Image-Generator)
 """
 
+# TODO : add support for img2img mode
+
 from __future__ import annotations
 
 import base64

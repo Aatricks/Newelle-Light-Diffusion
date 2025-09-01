@@ -7,6 +7,9 @@ Image generation extension for Newelle using the LightDiffusion-Next backend.
 
 ![demo](/demo.png)
 
+⭐ If this project helps you, please give it a star! It helps others discover it too.
+---
+
 ## Features
 
 - 🖼️ Generate images inline in Newelle via LightDiffusion-Next.
