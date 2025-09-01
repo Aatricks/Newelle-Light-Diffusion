@@ -35,10 +35,14 @@ class LightDiffusionExtension(NewelleExtension):
         super().__init__(pip_path, extension_path, settings)
         self.cache_dir = os.path.join(self.extension_path, "generated_images")
         os.makedirs(self.cache_dir, exist_ok=True)
+        # Default quality prompt used for upscaling-only codeblocks
+        self.DEFAULT_UPSCALE_QUALITY_PROMPT = (
+            "best quality, ultra-detailed, high-resolution, sharp focus, photorealistic, 4k"
+        )
 
     def get_replace_codeblocks_langs(self) -> list:
         # Support either a generic tag or a specific one
-        return ["generateimage", "lightdiffusion"]
+        return ["generateimage", "lightdiffusion", "upscale"]
 
     def get_additional_prompts(self) -> list:
         return [
@@ -47,14 +51,53 @@ class LightDiffusionExtension(NewelleExtension):
                 "Generate Image",
                 "Generate images using the LightDiffusion backend",
                 (
-
-                    "If prompted to generate an image or to upscale an image, only follow this instruction and this exact format written just below"
+                    "If prompted to generate an image or to upscale an image use the generateimage block, only follow this instruction and this exact format written just below\n\n"
                     "```generateimage\n"
                     "# Optional: for img2img/upscaling, include a source image path on its own line, if the image provided is [img-0] do not add the image path but only make up a prompt of quality tags:\n"
-                    "img: /absolute/path/to/image.png\n"
+                    "# img: /absolute/path/to/image.png\n"
                     "your prompt here\n"
                     "```\n"
-                    "Use detailed prompts, with english words separated by commas\n"
+                    "Use detailed prompts, with english words separated by commas\n\n"
+                    "if the user uses the command @gen, it means you need to use the generateimage block\n\n"
+                    "Do not add the # lines in the final outputted generateimage block but do add the path to the image above the prompt as instructed if one is given\n\n"
+                    "Do not write the generateimage key word while thinking so you should only use it for the final output\n\n"
+                    "Output exactly one fenced code block and nothing else before or after it. Do not add explanations, notes, or additional text outside the block.\n\n"
+                    "Correct:\n"
+                    "```generateimage\n"
+                    "img: /home/user/pic.png\n"
+                    "portrait, cinematic lighting, bokeh, ultra-detailed, 4k\n"
+                    "```\n"
+                    "Incorrect (has extra text):\n"
+                    "Here is your image.\n"
+                    "```generateimage\n"
+                    "portrait, cinematic lighting\n"
+                    "```\n"
+                    "Overall if prompted to generate or upscale don't overthink it and follow the instructions\n"
+                ),
+            ),
+            PromptDescription(
+                "upscale-image-lightdiffusion",
+                "Upscale Image",
+                "Upscale an existing image using a default high-quality prompt",
+                (
+                    "If prompted to upscale an image, only follow this instruction and this exact format written just below\n\n"
+                    "```upscale\n"
+                    "# Required: include a source image path on its own line; do not add any additional prompt lines.\n"
+                    "img: /absolute/path/to/image.png\n"
+                    "```\n"
+                    "No prompt is needed; a default quality prompt will be used automatically.\n\n"
+                    "Do not write the upscale key word while thinking so you should only use it for the final output\n\n"
+                    "Output exactly one fenced code block and nothing else before or after it. Do not add explanations, notes, or additional text outside the block.\n\n"
+                    "Correct:\n"
+                    "```upscale\n"
+                    "img: /home/user/pic.png\n"
+                    "```\n"
+                    "Incorrect (missing img line):\n"
+                    "```upscale\n"
+                    "please upscale this\n"
+                    "```\n"
+                    "Overall if prompted to upscale don't overthink it and follow the instructions\n\n"
+                    "Under no circumstance write more than once the upscale block, there should be only one written, used for the final output\n"
                 ),
             ),
         ]
@@ -280,10 +323,15 @@ class LightDiffusionExtension(NewelleExtension):
         widget = ImageGeneratorWidget(width=400, height=400)
         # Normalize the incoming block so we support both multi-line and one-liner formats
         normalized_prompt, inline_img = self._parse_codeblock_for_img2img(codeblock, lang)
-        widget.set_prompt(normalized_prompt)
+        is_upscale = self._is_upscale_lang(lang)
+        # For upscaling, we don't take a user prompt; display the default for clarity
+        widget.set_prompt(self.DEFAULT_UPSCALE_QUALITY_PROMPT if is_upscale else normalized_prompt)
         if inline_img:
             widget.img2img_image = self._normalize_local_path(inline_img)
-            widget.img2img_enabled = True
+        # Force Img2Img when using the upscale block
+        widget.img2img_enabled = True if is_upscale else bool(inline_img)
+        if is_upscale:
+            widget.force_default_prompt = True
         cached_path = os.path.join(self.cache_dir, f"{msg_uuid}.png")
         if os.path.exists(cached_path):
             widget.set_image_from_path(cached_path)
@@ -293,10 +341,15 @@ class LightDiffusionExtension(NewelleExtension):
         widget = ImageGeneratorWidget(width=400, height=400)
         # Normalize the incoming block so we support both multi-line and one-liner formats
         normalized_prompt, inline_img = self._parse_codeblock_for_img2img(codeblock, lang)
-        widget.set_prompt(normalized_prompt)
+        is_upscale = self._is_upscale_lang(lang)
+        # For upscaling, we don't take a user prompt; display the default for clarity
+        widget.set_prompt(self.DEFAULT_UPSCALE_QUALITY_PROMPT if is_upscale else normalized_prompt)
         if inline_img:
             widget.img2img_image = self._normalize_local_path(inline_img)
-            widget.img2img_enabled = True
+        # Force Img2Img when using the upscale block
+        widget.img2img_enabled = True if is_upscale else bool(inline_img)
+        if is_upscale:
+            widget.force_default_prompt = True
         Thread(target=self.generate_image, args=(normalized_prompt, widget, msg_uuid)).start()
         return widget
 
@@ -355,8 +408,7 @@ class LightDiffusionExtension(NewelleExtension):
             endpoint_path: str = extra_payload.get("endpoint_path", "/api/generate")
             url = f"{base_url}{endpoint_path}"
 
-            # Prepare prompts
-            positive = pos_tpl.replace("[input]", prompt)
+            # We'll compute the effective prompt below (supports default for upscaling)
             negative = neg_tpl
 
             # Helpers to coerce values from settings
@@ -395,6 +447,28 @@ class LightDiffusionExtension(NewelleExtension):
                         return False
                     return default
 
+            # Determine effective img2img (inline image path takes precedence over settings)
+            inline_img = getattr(widget, "img2img_image", None)
+            inline_img = self._normalize_local_path(inline_img) if inline_img else None
+            settings_img = (self.get_setting("img2img_image") or "").strip() or None
+            settings_enabled = get_bool("img2img_enabled", False)
+            effective_img = inline_img or settings_img
+            effective_enabled = bool(inline_img) or settings_enabled
+            
+            if effective_enabled and not effective_img:
+                show_error_message("Img2Img is enabled but no image was provided (neither inline nor in settings).")
+                return
+
+            # Determine effective prompt: if upscaling-only or empty prompt with img2img, use default quality prompt
+            force_default = bool(getattr(widget, "force_default_prompt", False))
+            if force_default or ((not (prompt or "").strip()) and effective_enabled and effective_img):
+                prompt_for_model = self.DEFAULT_UPSCALE_QUALITY_PROMPT
+            else:
+                prompt_for_model = prompt
+
+            # Prepare prompts
+            positive = pos_tpl.replace("[input]", prompt_for_model)
+
             # Construct a LightDiffusion-friendly payload (aligns with app.py defaults)
             payload: Dict[str, Any] = {
                 "prompt": positive,
@@ -407,8 +481,8 @@ class LightDiffusionExtension(NewelleExtension):
                 "adetailer": get_bool("adetailer", False),
                 "enhance_prompt": get_bool("enhance_prompt", False),
                 # effective img2img fields set below (inline path overrides settings)
-                "img2img_enabled": False,
-                "img2img_image": None,
+                "img2img_enabled": effective_enabled,
+                "img2img_image": effective_img,
                 "stable_fast": get_bool("stable_fast", False),
                 # If explicit seed is provided, server will force reuse; otherwise honor UI toggle
                 "reuse_seed": (seed != -1) or get_bool("reuse_seed", False),
@@ -423,18 +497,6 @@ class LightDiffusionExtension(NewelleExtension):
                 "keep_models_loaded": get_bool("keep_models_loaded", True),
                 "enable_preview": get_bool("enable_preview", False),
             }
-            # Determine effective img2img (inline image path takes precedence over settings)
-            inline_img = getattr(widget, "img2img_image", None)
-            inline_img = self._normalize_local_path(inline_img) if inline_img else None
-            settings_img = (self.get_setting("img2img_image") or "").strip() or None
-            settings_enabled = get_bool("img2img_enabled", False)
-            effective_img = inline_img or settings_img
-            effective_enabled = bool(inline_img) or settings_enabled
-            payload["img2img_enabled"] = effective_enabled
-            payload["img2img_image"] = effective_img
-            if effective_enabled and not effective_img:
-                show_error_message("Img2Img is enabled but no image was provided (neither inline nor in settings).")
-                return
 
             # Attach commonly requested extras if backend supports them
             if steps is not None:
@@ -518,7 +580,7 @@ class LightDiffusionExtension(NewelleExtension):
             return s.strip()
 
         # Accept optional punctuation like ':' or '-' after the tag
-        tag_patterns = [r"^generateimage\b[:\-]?", r"^lightdiffusion\b[:\-]?"]
+        tag_patterns = [r"^generateimage\b[:\-]?", r"^lightdiffusion\b[:\-]?", r"^upscale\b[:\-]?"]
 
         body = (codeblock or "").strip()
         info = (lang or "").strip()
@@ -613,6 +675,9 @@ class LightDiffusionExtension(NewelleExtension):
             img_path = self._extract_inline_img_path(lang)
         clean_prompt = self._strip_img_lines(prompt_only)
         return clean_prompt, img_path
+
+    def _is_upscale_lang(self, lang: str | None) -> bool:
+        return (lang or "").strip().lower() == "upscale"
 
     def _save_base64_png(self, b64_data: str, out_path: str) -> None:
         # Some APIs prefix with data:image/png;base64,
