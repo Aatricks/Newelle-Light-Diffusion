@@ -3,7 +3,7 @@
     <img width="150" alt="Download on Flathub" src="https://raw.githubusercontent.com/qwersyk/Assets/main/newelle-extension.svg"/>
   </a>
 
-Image generation extension for Newelle using the LightDiffusion-Next backend.
+Image generation extension for Newelle using the [LightDiffusion-Next](https://github.com/Aatricks/LightDiffusion-Next) backend.
 
 ![demo](/demo.png)
 
@@ -22,7 +22,7 @@ Image generation extension for Newelle using the LightDiffusion-Next backend.
 ## Installation
 
 1. Install [Newelle](https://flathub.org/apps/io.github.qwersyk.Newelle) (or Nyarch Assistant).
-2. Ensure you have a running LightDiffusion-Next backend:
+2. Ensure you have a running [LightDiffusion-Next](https://github.com/Aatricks/LightDiffusion-Next) backend:
    ```fish
    https://github.com/Aatricks/LightDiffusion-Next.git
    cd LightDiffusion-Next
