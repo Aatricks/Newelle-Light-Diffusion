@@ -7,7 +7,6 @@ Image generation extension for Newelle using the [LightDiffusion-Next](https://g
 
 ![demo](/demo.png)
 
-⭐ If this project helps you, please give it a star! It helps others discover it too.
 ---
 
 ## Features
@@ -100,3 +99,6 @@ Use detailed prompts, with english words separated by commas
 ## License
 
 GPLv3 License. See [LICENSE](../LICENSE) for details.
+
+> [!TIP]
+> ⭐ If this project helps you, please give it a star! It helps others discover it too.
